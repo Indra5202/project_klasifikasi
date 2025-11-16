@@ -100,11 +100,11 @@ def extract_title(lines):
         if any(word in low for word in blacklist):
             continue
 
-        # jangan pakai baris yang mayoritas angka/metadata
+        # batasi baris yang terlalu penuh angka (tahun, volume, dsb.)
         if sum(ch.isdigit() for ch in clean) > 4:
             continue
 
-        # kandidat judul ditemukan → cek apakah ada lanjutan judul di baris berikutnya
+        # kandidat judul ditemukan → cek lanjutan judul
         title_lines = [clean]
         last_idx = i
 
@@ -114,18 +114,17 @@ def extract_title(lines):
                 break
             nxt_low = nxt.lower()
 
-            # berhenti kalau ketemu abstract / section / info jurnal
+            # berhenti jika jelas bukan judul
             if "abstract" in nxt_low:
                 break
             if any(word in nxt_low for word in blacklist):
                 break
-
-            # kalau banyak angka, kemungkinan bukan judul (misal afiliasi / tahun)
-            if sum(ch.isdigit() for ch in nxt) > 3:
+            # >>> kunci: kalau baris berikut mengandung digit sama sekali, stop (biasanya author dengan superscript 1)
+            if any(ch.isdigit() for ch in nxt):
                 break
 
-            # jika kata-kata masih kapital & tidak terlalu panjang → kemungkinan lanjutan judul
-            if len(nxt.split()) >= 2 and len(nxt.split()) <= 12:
+            # panjang baris masuk akal untuk lanjutan judul
+            if 2 <= len(nxt.split()) <= 12:
                 title_lines.append(nxt)
                 last_idx = j
             else:
@@ -133,7 +132,7 @@ def extract_title(lines):
 
         return " ".join(title_lines), last_idx
 
-    # fallback kalau tidak ketemu
+    # fallback kalau tidak ketemu apa-apa
     for i, line in enumerate(lines):
         clean = line.strip()
         if clean:
@@ -165,7 +164,7 @@ def extract_author(lines, start_idx):
         if len(cap_words) < 2:
             continue
 
-        # biasanya ada koma / and / titik
+        # biasanya ada koma / and / titik → ini baris nama author (bukan afiliasi murni)
         if "," in clean or ";" in clean or " and " in clean.lower() or "." in clean:
             return clean
 
