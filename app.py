@@ -1,4 +1,3 @@
-import os
 import streamlit as st
 import pandas as pd
 import fitz  # PyMuPDF
@@ -40,8 +39,10 @@ st.markdown("""
 <div class='centered-logo-title'>
     <div>
        <h1 style="font-size:50px; color:#2c5d94; text-align:center;">SWISS GERMAN UNIVERSITY</h1>
-        <h1 style="font-size:50px; color:#2c5d94; text-align:center;">Paper Review ACMIT</h1>
-        <p style='font-size:16px; color:gray;'>Upload one paper PDF and let the app automatically check format structure compliance (rule-based, without ML).</p>
+       <h1 style="font-size:50px; color:#2c5d94; text-align:center;">Paper Review ACMIT</h1>
+       <p style='font-size:16px; color:gray;'>
+           Upload one paper PDF and let the app automatically check format structure compliance (rule-based, without ML).
+       </p>
     </div>
 </div>
 """, unsafe_allow_html=True)
@@ -51,6 +52,23 @@ st.markdown("---")
 # === Upload file ===
 st.markdown("<h4 style='color:#f39c12;'>📁 Upload PDF File</h4>", unsafe_allow_html=True)
 pdf_file = st.file_uploader("Upload a PDF", type="pdf")
+
+
+# === RESET STATE JIKA FILE BERGANTI ===
+if pdf_file is not None:
+    new_name = pdf_file.name
+    # kalau belum ada current_pdf atau nama file berbeda → reset form
+    if st.session_state.get("current_pdf") != new_name:
+        # backup dulu rekap review kalau ada
+        review_all_backup = st.session_state.get("review_all", [])
+
+        # bersihkan seluruh session_state (supaya form kosong lagi)
+        st.session_state.clear()
+
+        # restore rekap dan set nama pdf aktif
+        st.session_state["review_all"] = review_all_backup
+        st.session_state["current_pdf"] = new_name
+
 
 # Fungsi bantu: deteksi heading di teks
 def detect_heading_presence(full_text: str, heading: str) -> int:
@@ -62,30 +80,18 @@ def detect_heading_presence(full_text: str, heading: str) -> int:
     return 1 if heading.lower() in full_text.lower() else 0
 
 
-# Reset session state jika PDF baru di-upload
+# === Proses jika ada file PDF ===
 if pdf_file:
-    # Kalau PDF yang di-upload berbeda dengan sebelumnya, reset form
-    if "current_pdf" not in st.session_state or st.session_state.current_pdf != pdf_file.name:
-        # Simpan dulu rekap review lama (kalau ada)
-        review_all_backup = st.session_state.get("review_all", [])
-
-        # Bersihkan semua session_state
-        st.session_state.clear()
-
-        # Restore rekap review dan set nama PDF sekarang
-        st.session_state.review_all = review_all_backup
-        st.session_state.current_pdf = pdf_file.name
-
     # Baca teks dari PDF
     text = ""
     with fitz.open(stream=pdf_file.read(), filetype="pdf") as doc:
         for page in doc:
             text += page.get_text()
 
-    lines = text.split("\n")
+    lines = text.split("\n") if text else []
 
     # Cari judul (heuristic sederhana)
-    title = next((line.strip() for line in lines if line and line[0].isupper()), lines[0] if lines else "")
+    title = next((line.strip() for line in lines if line and line[0].isupper()), lines[0].strip() if lines else "")
 
     # Cari line yang kemungkinan berisi nama penulis (heuristic)
     student_author_line = next(
@@ -189,6 +195,7 @@ if pdf_file:
             st.session_state.review_all.append(summary)
             st.success("✅ Review form submitted.")
 
+
 # === Tampilkan hasil review semua ===
 if "review_all" in st.session_state and st.session_state.review_all:
     st.markdown("### 🚀 Final Review Summary (All Sessions)")
@@ -213,5 +220,4 @@ if "review_all" in st.session_state and st.session_state.review_all:
         csv,
         "review_summary.csv",
         "text/csv"
-
     )
