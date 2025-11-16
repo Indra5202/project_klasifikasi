@@ -11,7 +11,7 @@ from google.oauth2.service_account import Credentials
 # KONFIGURASI
 # ============================================================
 
-# Nama FILE Google Sheet (bukan nama tab). Pastikan sama dengan di Google Drive.
+# (Optional) nama file Google Sheet, tidak dipakai untuk koneksi (kita pakai ID)
 SHEET_NAME = "ACMIT_Reviews_2025"
 
 # User & Role
@@ -110,8 +110,8 @@ st.markdown("""
 
 def get_worksheet():
     """
-    Konek ke Google Sheet (file) dan kembalikan worksheet pertama.
-    Menggunakan Credentials dari st.secrets["google_service_account"].
+    Konek ke Google Sheet berdasarkan ID (bukan nama) dan kembalikan worksheet pertama.
+    ID harus disimpan di st.secrets["google_sheet_id"].
     """
     scopes = [
         "https://www.googleapis.com/auth/spreadsheets",
@@ -120,8 +120,10 @@ def get_worksheet():
     creds_info = st.secrets["google_service_account"]
     creds = Credentials.from_service_account_info(creds_info, scopes=scopes)
     client = gspread.authorize(creds)
-    sh = client.open(SHEET_NAME)   # buka file berdasarkan NAMA
-    ws = sh.sheet1                 # pakai sheet/tab pertama
+
+    sheet_id = st.secrets["google_sheet_id"]  # <-- ID dari Secrets
+    sh = client.open_by_key(sheet_id)         # buka file berdasarkan ID, bukan nama
+    ws = sh.sheet1                            # pakai tab pertama
     return ws
 
 
