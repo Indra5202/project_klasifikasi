@@ -1,5 +1,0 @@
-streamlit
-pandas
-pymupdf
-joblib
-scikit-learn
