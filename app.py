@@ -399,31 +399,59 @@ if pdf_file:
 # === Tampilkan hasil review semua ===
 if "review_all" in st.session_state and st.session_state.review_all:
     st.markdown("### 🚀 Final Review Summary (All Sessions)")
+
     df_all = pd.DataFrame(st.session_state.review_all)
     df_all.insert(0, "No", range(1, len(df_all) + 1))
 
-    st.markdown("#### 🔹 Format Features")
-    format_cols = ["No", "file_name", "title", "status", "reviewer_user", "reviewer_role"] + [h.capitalize() for h in HEADINGS]
-    st.dataframe(df_all[format_cols].set_index("No"), use_container_width=True)
+    # pastikan semua kolom yang kita butuhkan SELALU ada
+    needed_format_cols = ["file_name", "title", "status", "reviewer_user", "reviewer_role"] + [
+        h.capitalize() for h in HEADINGS
+    ]
+    needed_subjective_cols = [
+        "student_author", "advisor", "reviewed_by",
+        "english_ok", "format_ok", "sota_ok", "clarity_ok", "figures_ok",
+        "conclusion_ok", "references_ok", "recommendations", "overall_eval",
+        "timestamp",
+    ]
 
-    # Kalau mau, admin saja yang lihat full summary (contoh role-based sederhana)
+    for col in needed_format_cols + needed_subjective_cols:
+        if col not in df_all.columns:
+            df_all[col] = ""
+
+    # filter data sesuai role
     if current_role == "Admin":
-        st.markdown("#### 🔴 Reviewer Evaluation (All)")
+        df_view = df_all.copy()
+    else:
+        # reviewer hanya lihat review milik dia sendiri
+        df_view = df_all[df_all["reviewer_user"] == current_user].copy()
+
+    if df_view.empty:
+        st.info("No reviews recorded yet for this user.")
+    else:
+        st.markdown("#### 🔹 Format Features")
+        format_cols = ["No", "file_name", "title", "status", "reviewer_user", "reviewer_role"] + [
+            h.capitalize() for h in HEADINGS
+        ]
+        st.dataframe(df_view[format_cols].set_index("No"), use_container_width=True)
+
+        st.markdown("#### 🔴 Reviewer Evaluation")
         subjective_cols = [
             "No", "file_name", "title", "student_author", "advisor", "reviewed_by",
             "reviewer_user", "reviewer_role",
             "english_ok", "format_ok", "sota_ok", "clarity_ok", "figures_ok",
             "conclusion_ok", "references_ok", "recommendations", "overall_eval", "timestamp"
         ]
-        st.dataframe(df_all[subjective_cols].set_index("No"), use_container_width=True)
+        st.dataframe(df_view[subjective_cols].set_index("No"), use_container_width=True)
 
-        csv = df_all.to_csv(index=False).encode("utf-8")
-        st.download_button(
-            "💾 Download All Review Summary as CSV (Admin only)",
-            csv,
-            "review_summary.csv",
-            "text/csv"
-        )
+        # hanya Admin yang boleh download semua review
+        if current_role == "Admin":
+            csv = df_all.to_csv(index=False).encode("utf-8")
+            st.download_button(
+                "💾 Download All Review Summary as CSV (Admin only)",
+                csv,
+                "review_summary.csv",
+                "text/csv"
+            )
 
     # === Warning jika user mau refresh/close saat ada data review ===
     html("""
