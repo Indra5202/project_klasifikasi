@@ -4,8 +4,52 @@ import fitz  # PyMuPDF
 from datetime import datetime
 from streamlit.components.v1 import html  # untuk warning sebelum refresh/close
 
+# === KONFIGURASI USER & ROLE (sementara hardcode di sini) ===
+USERS = {
+    "admin": {"password": "admin123", "role": "Admin"},
+    "reviewer1": {"password": "rev123", "role": "Reviewer"},
+    "reviewer2": {"password": "rev456", "role": "Reviewer"},
+    # silakan tambah user lain di sini
+}
+
 # === Konfigurasi halaman ===
 st.set_page_config(page_title="Paper Format Classifier", layout="wide")
+
+
+# === FUNGSI LOGIN ===
+def login_block():
+    st.sidebar.title("Login Reviewer")
+
+    username = st.sidebar.text_input("Username")
+    password = st.sidebar.text_input("Password", type="password")
+
+    if st.sidebar.button("Login"):
+        user = USERS.get(username)
+        if user and user["password"] == password:
+            st.session_state["user"] = username
+            st.session_state["role"] = user["role"]
+            st.sidebar.success(f"Logged in as {username} ({user['role']})")
+        else:
+            st.sidebar.error("Invalid username or password")
+
+    # tombol logout
+    if "user" in st.session_state:
+        if st.sidebar.button("Logout"):
+            for k in list(st.session_state.keys()):
+                del st.session_state[k]
+            st.rerun()
+
+
+# === Panggil blok login dulu ===
+login_block()
+
+# Kalau belum login, stop di sini
+if "user" not in st.session_state:
+    st.info("Please login from the left sidebar to use the app.")
+    st.stop()
+
+current_user = st.session_state["user"]
+current_role = st.session_state["role"]
 
 # === Daftar heading & sinonim (outline ACMIT baru) ===
 HEADINGS = [
@@ -68,13 +112,16 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # === Heading dengan logo/title ===
-st.markdown("""
+st.markdown(f"""
 <div class='centered-logo-title'>
     <div>
        <h1 style="font-size:50px; color:#2c5d94; text-align:center;">SWISS GERMAN UNIVERSITY</h1>
        <h1 style="font-size:50px; color:#2c5d94; text-align:center;">Paper Review ACMIT</h1>
-       <p style='font-size:16px; color:gray;'>
-           Upload one paper PDF and let the app automatically check format structure compliance.
+       <p style='font-size:16px; color:gray; text-align:center;'>
+           Logged in as <b>{current_user}</b> ({current_role})
+       </p>
+       <p style='font-size:14px; color:gray; text-align:center;'>
+           Upload one paper PDF and let the app automatically check format structure compliance (rule-based, without ML).
        </p>
     </div>
 </div>
@@ -197,7 +244,7 @@ def extract_author(lines, start_idx):
 # === Proses jika ada file PDF ===
 if pdf_file:
     # key dasar per file (supaya setiap file punya widget state sendiri)
-    file_key = pdf_file.name.replace(".", "_").replace(" ", "_")
+    file_key = f"{current_user}_" + pdf_file.name.replace(".", "_").replace(" ", "_")
 
     # baca teks dari PDF
     text = ""
@@ -215,7 +262,9 @@ if pdf_file:
     detected = {
         "file_name": pdf_file.name,
         "title": title,
-        "student_author": student_author_line
+        "student_author": student_author_line,
+        "reviewer_user": current_user,
+        "reviewer_role": current_role,
     }
 
     for heading in HEADINGS:
@@ -354,24 +403,27 @@ if "review_all" in st.session_state and st.session_state.review_all:
     df_all.insert(0, "No", range(1, len(df_all) + 1))
 
     st.markdown("#### 🔹 Format Features")
-    format_cols = ["No", "file_name", "title", "status"] + [h.capitalize() for h in HEADINGS]
+    format_cols = ["No", "file_name", "title", "status", "reviewer_user", "reviewer_role"] + [h.capitalize() for h in HEADINGS]
     st.dataframe(df_all[format_cols].set_index("No"), use_container_width=True)
 
-    st.markdown("#### 🔴 Reviewer Evaluation")
-    subjective_cols = [
-        "No", "file_name", "title", "student_author", "advisor", "reviewed_by",
-        "english_ok", "format_ok", "sota_ok", "clarity_ok", "figures_ok",
-        "conclusion_ok", "references_ok", "recommendations", "overall_eval", "timestamp"
-    ]
-    st.dataframe(df_all[subjective_cols].set_index("No"), use_container_width=True)
+    # Kalau mau, admin saja yang lihat full summary (contoh role-based sederhana)
+    if current_role == "Admin":
+        st.markdown("#### 🔴 Reviewer Evaluation (All)")
+        subjective_cols = [
+            "No", "file_name", "title", "student_author", "advisor", "reviewed_by",
+            "reviewer_user", "reviewer_role",
+            "english_ok", "format_ok", "sota_ok", "clarity_ok", "figures_ok",
+            "conclusion_ok", "references_ok", "recommendations", "overall_eval", "timestamp"
+        ]
+        st.dataframe(df_all[subjective_cols].set_index("No"), use_container_width=True)
 
-    csv = df_all.to_csv(index=False).encode("utf-8")
-    st.download_button(
-        "💾 Download All Review Summary as CSV",
-        csv,
-        "review_summary.csv",
-        "text/csv"
-    )
+        csv = df_all.to_csv(index=False).encode("utf-8")
+        st.download_button(
+            "💾 Download All Review Summary as CSV (Admin only)",
+            csv,
+            "review_summary.csv",
+            "text/csv"
+        )
 
     # === Warning jika user mau refresh/close saat ada data review ===
     html("""
