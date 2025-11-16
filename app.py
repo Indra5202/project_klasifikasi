@@ -53,15 +53,6 @@ st.markdown("---")
 st.markdown("<h4 style='color:#f39c12;'>📁 Upload PDF File</h4>", unsafe_allow_html=True)
 pdf_file = st.file_uploader("Upload a PDF", type="pdf")
 
-# === RESET STATE JIKA FILE BERGANTI ===
-if pdf_file is not None:
-    new_name = pdf_file.name
-    if st.session_state.get("current_pdf") != new_name:
-        review_all_backup = st.session_state.get("review_all", [])
-        st.session_state.clear()
-        st.session_state["review_all"] = review_all_backup
-        st.session_state["current_pdf"] = new_name
-
 
 # === Fungsi bantu ===
 
@@ -86,13 +77,11 @@ def extract_title(lines):
 
     max_lookahead = 4  # maksimal 4 baris lanjutan judul
 
-    # cek hanya 40 baris pertama (bagian atas paper)
-    for i, line in enumerate(lines[:40]):
+    for i, line in enumerate(lines[:40]):  # cek hanya bagian atas
         clean = line.strip()
         if not clean:
             continue
 
-        # minimal 3 kata supaya bukan text pendek
         if len(clean.split()) < 3:
             continue
 
@@ -100,7 +89,7 @@ def extract_title(lines):
         if any(word in low for word in blacklist):
             continue
 
-        # batasi baris yang terlalu penuh angka (tahun, volume, dsb.)
+        # hindari baris penuh angka
         if sum(ch.isdigit() for ch in clean) > 4:
             continue
 
@@ -119,11 +108,10 @@ def extract_title(lines):
                 break
             if any(word in nxt_low for word in blacklist):
                 break
-            # >>> kunci: kalau baris berikut mengandung digit sama sekali, stop (biasanya author dengan superscript 1)
+            # kalau ada angka sama sekali, besar kemungkinan ini baris author (dengan superscript 1)
             if any(ch.isdigit() for ch in nxt):
                 break
 
-            # panjang baris masuk akal untuk lanjutan judul
             if 2 <= len(nxt.split()) <= 12:
                 title_lines.append(nxt)
                 last_idx = j
@@ -132,7 +120,7 @@ def extract_title(lines):
 
         return " ".join(title_lines), last_idx
 
-    # fallback kalau tidak ketemu apa-apa
+    # fallback
     for i, line in enumerate(lines):
         clean = line.strip()
         if clean:
@@ -159,12 +147,11 @@ def extract_author(lines, start_idx):
         if not (2 <= len(words) <= 25):
             continue
 
-        # butuh minimal 2 kata kapital (nama)
+        # minimal 2 kata kapital
         cap_words = [w for w in words if w[0].isupper()]
         if len(cap_words) < 2:
             continue
 
-        # biasanya ada koma / and / titik → ini baris nama author (bukan afiliasi murni)
         if "," in clean or ";" in clean or " and " in clean.lower() or "." in clean:
             return clean
 
@@ -173,6 +160,9 @@ def extract_author(lines, start_idx):
 
 # === Proses jika ada file PDF ===
 if pdf_file:
+    # key dasar per file (supaya setiap file punya widget state sendiri)
+    file_key = pdf_file.name.replace(".", "_").replace(" ", "_")
+
     # baca teks dari PDF
     text = ""
     with fitz.open(stream=pdf_file.read(), filetype="pdf") as doc:
@@ -212,14 +202,22 @@ if pdf_file:
     st.markdown("<h5 style='color:#e74c3c;'>🔴 Reviewer Evaluation</h5>", unsafe_allow_html=True)
 
     with st.expander(f"📄 Review: {detected['file_name']}"):
-        advisor = st.text_input("Advisor:", key="review_advisor")
-        reviewed_by = st.text_input("Reviewer name:", key="review_reviewer")
+        advisor = st.text_input("Advisor:", key=f"{file_key}_advisor")
+        reviewed_by = st.text_input("Reviewer name:", key=f"{file_key}_reviewer")
 
         def radio_with_comment(question, key_prefix):
-            val = st.radio(question, ["Yes", "No"], index=None, key=f"review_{key_prefix}_val")
+            val = st.radio(
+                question,
+                ["Yes", "No"],
+                index=None,
+                key=f"{file_key}_{key_prefix}_val"
+            )
             comment = ""
             if val == "No":
-                comment = st.text_area(f"{question} - Comments:", key=f"review_{key_prefix}_comment")
+                comment = st.text_area(
+                    f"{question} - Comments:",
+                    key=f"{file_key}_{key_prefix}_comment"
+                )
             return val, comment
 
         english_ok, english_issue = radio_with_comment(
@@ -229,10 +227,12 @@ if pdf_file:
             "Format follows author guideline?", "format"
         )
         sota_ok = st.radio(
-            "Is the problem state-of-the-art?", ["Yes", "No"], index=None, key="review_sota"
+            "Is the problem state-of-the-art?", ["Yes", "No"],
+            index=None, key=f"{file_key}_sota"
         )
         clarity_ok = st.radio(
-            "Is the problem clearly stated?", ["Yes", "No"], index=None, key="review_clarity"
+            "Is the problem clearly stated?", ["Yes", "No"],
+            index=None, key=f"{file_key}_clarity"
         )
         figures_ok, figures_comment = radio_with_comment(
             "Do figures/tables support the goal/result?", "figures"
@@ -244,14 +244,16 @@ if pdf_file:
             "Are references up-to-date?", "references"
         )
 
-        recommendations = st.text_area("Recommendations:", key="review_recommend")
+        recommendations = st.text_area(
+            "Recommendations:", key=f"{file_key}_recommend"
+        )
         overall_eval = st.selectbox(
             "Overall Evaluation",
             ["", "Reject", "Accept with revision", "Full acceptance"],
-            key="review_eval"
+            key=f"{file_key}_overall_eval"
         )
 
-        if st.button("Submit Review"):
+        if st.button("Submit Review", key=f"{file_key}_submit"):
             summary = {
                 **detected,
                 "advisor": advisor,
