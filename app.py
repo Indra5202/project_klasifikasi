@@ -4,6 +4,11 @@ import fitz  # PyMuPDF
 from datetime import datetime
 from streamlit.components.v1 import html  # untuk warning sebelum refresh/close
 
+# === GLOBAL STORAGE UNTUK SEMUA REVIEW (share ke semua session) ===
+# (Hilang kalau server di-restart, tapi dibagi ke semua user yang sedang pakai.)
+if "GLOBAL_REVIEWS" not in globals():
+    GLOBAL_REVIEWS = []
+
 # === KONFIGURASI USER & ROLE (sementara hardcode di sini) ===
 USERS = {
     "admin": {"password": "admin123", "role": "Admin"},
@@ -129,11 +134,6 @@ st.markdown(f"""
 
 st.markdown("---")
 
-# === Upload file ===
-st.markdown("<h4 style='color:#f39c12;'>📁 Upload PDF File</h4>", unsafe_allow_html=True)
-pdf_file = st.file_uploader("Upload a PDF", type="pdf")
-
-
 # === Fungsi bantu ===
 
 def detect_heading_presence(full_text: str, section_key: str) -> int:
@@ -241,166 +241,172 @@ def extract_author(lines, start_idx):
     return ""
 
 
-# === Proses jika ada file PDF ===
-if pdf_file:
-    # key dasar per file (supaya setiap file punya widget state sendiri)
-    file_key = f"{current_user}_" + pdf_file.name.replace(".", "_").replace(" ", "_")
+# === BAGIAN UPLOAD & REVIEW: hanya untuk Reviewer ===
+if current_role == "Reviewer":
+    st.markdown("<h4 style='color:#f39c12;'>📁 Upload PDF File</h4>", unsafe_allow_html=True)
+    pdf_file = st.file_uploader("Upload a PDF", type="pdf")
 
-    # baca teks dari PDF
-    text = ""
-    with fitz.open(stream=pdf_file.read(), filetype="pdf") as doc:
-        for page in doc:
-            text += page.get_text()
+    if pdf_file:
+        # key dasar per file (supaya setiap file punya widget state sendiri per user)
+        file_key = f"{current_user}_" + pdf_file.name.replace(".", "_").replace(" ", "_")
 
-    lines = text.split("\n") if text else []
+        # baca teks dari PDF
+        text = ""
+        with fitz.open(stream=pdf_file.read(), filetype="pdf") as doc:
+            for page in doc:
+                text += page.get_text()
 
-    # pakai heuristik title & author
-    title, title_last_idx = extract_title(lines)
-    student_author_line = extract_author(lines, title_last_idx)
+        lines = text.split("\n") if text else []
 
-    # deteksi heading berdasarkan outline baru
-    detected = {
-        "file_name": pdf_file.name,
-        "title": title,
-        "student_author": student_author_line,
-        "reviewer_user": current_user,
-        "reviewer_role": current_role,
-    }
+        # pakai heuristik title & author
+        title, title_last_idx = extract_title(lines)
+        student_author_line = extract_author(lines, title_last_idx)
 
-    for heading in HEADINGS:
-        detected[heading.capitalize()] = detect_heading_presence(text, heading)
+        # deteksi heading berdasarkan outline baru
+        detected = {
+            "file_name": pdf_file.name,
+            "title": title,
+            "student_author": student_author_line,
+            "reviewer_user": current_user,
+            "reviewer_role": current_role,
+        }
 
-    # cek compliant & bagian yang hilang
-    missing_sections = [h for h in HEADINGS if detected[h.capitalize()] == 0]
-    all_ok = len(missing_sections) == 0
-    detected["status"] = "✅ Compliant" if all_ok else "❌ Non-compliant"
+        for heading in HEADINGS:
+            detected[heading.capitalize()] = detect_heading_presence(text, heading)
 
-    # pesan format lebih informatif
-    if all_ok:
-        st.success("✅ All required sections are present. Format is COMPLIANT.")
-    else:
-        st.warning(
-            "❌ Format is NOT compliant. Missing sections: "
-            + ", ".join(s.title() for s in missing_sections)
-        )
+        # cek compliant & bagian yang hilang
+        missing_sections = [h for h in HEADINGS if detected[h.capitalize()] == 0]
+        all_ok = len(missing_sections) == 0
+        detected["status"] = "✅ Compliant" if all_ok else "❌ Non-compliant"
 
-    # tampilkan hasil format
-    st.markdown("<h5 style='color:#2c3e50;'>🔹 Format Features</h5>", unsafe_allow_html=True)
-    df_format = pd.DataFrame([detected])
-    st.dataframe(df_format, use_container_width=True)
-
-    st.markdown("---")
-
-    # === Reviewer Form ===
-    st.markdown("<h5 style='color:#e74c3c;'>🔴 Reviewer Evaluation</h5>", unsafe_allow_html=True)
-
-    with st.expander(f"📄 Review: {detected['file_name']}"):
-        advisor = st.text_input("Advisor:", key=f"{file_key}_advisor")
-        reviewed_by = st.text_input("Reviewer name:", key=f"{file_key}_reviewer")
-
-        def radio_with_comment(question, key_prefix):
-            val = st.radio(
-                question,
-                ["Yes", "No"],
-                index=None,
-                key=f"{file_key}_{key_prefix}_val"
+        # pesan format lebih informatif
+        if all_ok:
+            st.success("✅ All required sections are present. Format is COMPLIANT.")
+        else:
+            st.warning(
+                "❌ Format is NOT compliant. Missing sections: "
+                + ", ".join(s.title() for s in missing_sections)
             )
-            comment = ""
-            if val == "No":
-                comment = st.text_area(
-                    f"{question} - Comments:",
-                    key=f"{file_key}_{key_prefix}_comment"
+
+        # tampilkan hasil format
+        st.markdown("<h5 style='color:#2c3e50;'>🔹 Format Features</h5>", unsafe_allow_html=True)
+        df_format = pd.DataFrame([detected])
+        st.dataframe(df_format, use_container_width=True)
+
+        st.markdown("---")
+
+        # === Reviewer Form ===
+        st.markdown("<h5 style='color:#e74c3c;'>🔴 Reviewer Evaluation</h5>", unsafe_allow_html=True)
+
+        with st.expander(f"📄 Review: {detected['file_name']}"):
+            advisor = st.text_input("Advisor:", key=f"{file_key}_advisor")
+            reviewed_by = st.text_input("Reviewer name:", key=f"{file_key}_reviewer")
+
+            def radio_with_comment(question, key_prefix):
+                val = st.radio(
+                    question,
+                    ["Yes", "No"],
+                    index=None,
+                    key=f"{file_key}_{key_prefix}_val"
                 )
-            return val, comment
+                comment = ""
+                if val == "No":
+                    comment = st.text_area(
+                        f"{question} - Comments:",
+                        key=f"{file_key}_{key_prefix}_comment"
+                    )
+                return val, comment
 
-        english_ok, english_issue = radio_with_comment(
-            "Is the manuscript written in proper and sound English?", "english"
-        )
-        format_ok, format_comment = radio_with_comment(
-            "Format follows author guideline?", "format"
-        )
-        sota_ok = st.radio(
-            "Is the problem state-of-the-art?", ["Yes", "No"],
-            index=None, key=f"{file_key}_sota"
-        )
-        clarity_ok = st.radio(
-            "Is the problem clearly stated?", ["Yes", "No"],
-            index=None, key=f"{file_key}_clarity"
-        )
-        figures_ok, figures_comment = radio_with_comment(
-            "Do figures/tables support the goal/result?", "figures"
-        )
-        conclusion_ok, conclusion_comment = radio_with_comment(
-            "Does the conclusion answer the problem?", "conclusion"
-        )
-        references_ok, references_comment = radio_with_comment(
-            "Are references up-to-date?", "references"
-        )
+            english_ok, english_issue = radio_with_comment(
+                "Is the manuscript written in proper and sound English?", "english"
+            )
+            format_ok, format_comment = radio_with_comment(
+                "Format follows author guideline?", "format"
+            )
+            sota_ok = st.radio(
+                "Is the problem state-of-the-art?", ["Yes", "No"],
+                index=None, key=f"{file_key}_sota"
+            )
+            clarity_ok = st.radio(
+                "Is the problem clearly stated?", ["Yes", "No"],
+                index=None, key=f"{file_key}_clarity"
+            )
+            figures_ok, figures_comment = radio_with_comment(
+                "Do figures/tables support the goal/result?", "figures"
+            )
+            conclusion_ok, conclusion_comment = radio_with_comment(
+                "Does the conclusion answer the problem?", "conclusion"
+            )
+            references_ok, references_comment = radio_with_comment(
+                "Are references up-to-date?", "references"
+            )
 
-        recommendations = st.text_area(
-            "Recommendations:", key=f"{file_key}_recommend"
-        )
-        overall_eval = st.selectbox(
-            "Overall Evaluation",
-            ["", "Reject", "Accept with revision", "Full acceptance"],
-            key=f"{file_key}_overall_eval"
-        )
+            recommendations = st.text_area(
+                "Recommendations:", key=f"{file_key}_recommend"
+            )
+            overall_eval = st.selectbox(
+                "Overall Evaluation",
+                ["", "Reject", "Accept with revision", "Full acceptance"],
+                key=f"{file_key}_overall_eval"
+            )
 
-        # === VALIDASI sebelum submit ===
-        if st.button("Submit Review", key=f"{file_key}_submit"):
-            errors = []
+            # === VALIDASI sebelum submit ===
+            if st.button("Submit Review", key=f"{file_key}_submit"):
+                errors = []
 
-            if not advisor.strip():
-                errors.append("• Advisor is required.")
-            if not reviewed_by.strip():
-                errors.append("• Reviewer name is required.")
-            if overall_eval.strip() == "":
-                errors.append("• Overall Evaluation is required.")
+                if not advisor.strip():
+                    errors.append("• Advisor is required.")
+                if not reviewed_by.strip():
+                    errors.append("• Reviewer name is required.")
+                if overall_eval.strip() == "":
+                    errors.append("• Overall Evaluation is required.")
 
-            if (
-                english_ok is None
-                or format_ok is None
-                or sota_ok is None
-                or clarity_ok is None
-                or figures_ok is None
-                or conclusion_ok is None
-                or references_ok is None
-            ):
-                errors.append("• Please answer all Yes/No questions.")
+                if (
+                    english_ok is None
+                    or format_ok is None
+                    or sota_ok is None
+                    or clarity_ok is None
+                    or figures_ok is None
+                    or conclusion_ok is None
+                    or references_ok is None
+                ):
+                    errors.append("• Please answer all Yes/No questions.")
 
-            if errors:
-                st.warning("Please complete the following before submitting:\n" + "\n".join(errors))
-            else:
-                summary = {
-                    **detected,
-                    "advisor": advisor,
-                    "reviewed_by": reviewed_by,
-                    "english_ok": english_ok,
-                    "english_issue": english_issue,
-                    "format_ok": format_ok,
-                    "format_comment": format_comment,
-                    "sota_ok": sota_ok,
-                    "clarity_ok": clarity_ok,
-                    "figures_ok": figures_ok,
-                    "figures_comment": figures_comment,
-                    "conclusion_ok": conclusion_ok,
-                    "conclusion_comment": conclusion_comment,
-                    "references_ok": references_ok,
-                    "references_comment": references_comment,
-                    "recommendations": recommendations,
-                    "overall_eval": overall_eval,
-                    "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                }
-                if "review_all" not in st.session_state:
-                    st.session_state.review_all = []
-                st.session_state.review_all.append(summary)
-                st.success("✅ Review form submitted.")
+                if errors:
+                    st.warning("Please complete the following before submitting:\n" + "\n".join(errors))
+                else:
+                    summary = {
+                        **detected,
+                        "advisor": advisor,
+                        "reviewed_by": reviewed_by,
+                        "english_ok": english_ok,
+                        "english_issue": english_issue,
+                        "format_ok": format_ok,
+                        "format_comment": format_comment,
+                        "sota_ok": sota_ok,
+                        "clarity_ok": clarity_ok,
+                        "figures_ok": figures_ok,
+                        "figures_comment": figures_comment,
+                        "conclusion_ok": conclusion_ok,
+                        "conclusion_comment": conclusion_comment,
+                        "references_ok": references_ok,
+                        "references_comment": references_comment,
+                        "recommendations": recommendations,
+                        "overall_eval": overall_eval,
+                        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    }
+                    GLOBAL_REVIEWS.append(summary)  # SIMPAN DI GLOBAL
+                    st.success("✅ Review form submitted.")
+elif current_role == "Admin":
+    # Admin tidak boleh upload / review
+    st.info("You are logged in as Admin. Admin can view and download all reviews but cannot upload new papers or submit reviews.")
 
-# === Tampilkan hasil review semua ===
-if "review_all" in st.session_state and st.session_state.review_all:
+
+# === Tampilkan hasil review semua (GLOBAL) ===
+if GLOBAL_REVIEWS:
     st.markdown("### 🚀 Final Review Summary (All Sessions)")
 
-    df_all = pd.DataFrame(st.session_state.review_all)
+    df_all = pd.DataFrame(GLOBAL_REVIEWS)
     df_all.insert(0, "No", range(1, len(df_all) + 1))
 
     # pastikan semua kolom yang kita butuhkan SELALU ada
@@ -420,7 +426,7 @@ if "review_all" in st.session_state and st.session_state.review_all:
 
     # filter data sesuai role
     if current_role == "Admin":
-        df_view = df_all.copy()
+        df_view = df_all.copy()  # Admin lihat SEMUA review
     else:
         # reviewer hanya lihat review milik dia sendiri
         df_view = df_all[df_all["reviewer_user"] == current_user].copy()
@@ -463,3 +469,5 @@ if "review_all" in st.session_state and st.session_state.review_all:
     });
     </script>
     """)
+else:
+    st.info("No reviews recorded yet.")
