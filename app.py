@@ -6,7 +6,7 @@ from datetime import datetime
 # === Konfigurasi halaman ===
 st.set_page_config(page_title="Paper Format Classifier", layout="wide")
 
-# === Daftar heading sesuai outline ACMIT baru ===
+# === Daftar heading & sinonim (outline ACMIT baru) ===
 HEADINGS = [
     "introduction",
     "materials and methods",
@@ -14,6 +14,38 @@ HEADINGS = [
     "conclusion",
     "references",
 ]
+
+SECTION_SYNONYMS = {
+    "introduction": [
+        "introduction",
+        "intro"
+    ],
+    "materials and methods": [
+        "materials and methods",
+        "material and methods",
+        "materials & methods",
+        "materials and method",
+        "methodology",
+        "methods and materials"
+    ],
+    "results and discussion": [
+        "results and discussion",
+        "result and discussion",
+        "results & discussion",
+        "results",
+        "discussion"
+    ],
+    "conclusion": [
+        "conclusion",
+        "conclusions",
+        "concluding remarks"
+    ],
+    "references": [
+        "references",
+        "reference",
+        "bibliography"
+    ],
+}
 
 # === Custom style ===
 st.markdown("""
@@ -56,11 +88,17 @@ pdf_file = st.file_uploader("Upload a PDF", type="pdf")
 
 # === Fungsi bantu ===
 
-def detect_heading_presence(full_text: str, heading: str) -> int:
-    """Mengembalikan 1 jika heading ditemukan di teks (case-insensitive), selain itu 0."""
+def detect_heading_presence(full_text: str, section_key: str) -> int:
+    """
+    Mengembalikan 1 jika salah satu sinonim heading ditemukan di teks (case-insensitive), selain itu 0.
+    """
     if not full_text:
         return 0
-    return 1 if heading.lower() in full_text.lower() else 0
+    text_low = full_text.lower()
+    for phrase in SECTION_SYNONYMS.get(section_key, [section_key]):
+        if phrase.lower() in text_low:
+            return 1
+    return 0
 
 
 def extract_title(lines):
@@ -89,7 +127,6 @@ def extract_title(lines):
         if any(word in low for word in blacklist):
             continue
 
-        # hindari baris penuh angka
         if sum(ch.isdigit() for ch in clean) > 4:
             continue
 
@@ -103,12 +140,11 @@ def extract_title(lines):
                 break
             nxt_low = nxt.lower()
 
-            # berhenti jika jelas bukan judul
             if "abstract" in nxt_low:
                 break
             if any(word in nxt_low for word in blacklist):
                 break
-            # kalau ada angka sama sekali, besar kemungkinan ini baris author (dengan superscript 1)
+            # kalau ada angka → kemungkinan baris author dengan superscript
             if any(ch.isdigit() for ch in nxt):
                 break
 
@@ -147,7 +183,6 @@ def extract_author(lines, start_idx):
         if not (2 <= len(words) <= 25):
             continue
 
-        # minimal 2 kata kapital
         cap_words = [w for w in words if w[0].isupper()]
         if len(cap_words) < 2:
             continue
@@ -171,7 +206,7 @@ if pdf_file:
 
     lines = text.split("\n") if text else []
 
-    # pakai heuristik baru
+    # pakai heuristik title & author
     title, title_last_idx = extract_title(lines)
     student_author_line = extract_author(lines, title_last_idx)
 
@@ -185,11 +220,19 @@ if pdf_file:
     for heading in HEADINGS:
         detected[heading.capitalize()] = detect_heading_presence(text, heading)
 
-    # evaluasi rule-based: compliant jika SEMUA heading ada
-    all_ok = all(detected[h.capitalize()] == 1 for h in HEADINGS)
+    # cek compliant & bagian yang hilang
+    missing_sections = [h for h in HEADINGS if detected[h.capitalize()] == 0]
+    all_ok = len(missing_sections) == 0
     detected["status"] = "✅ Compliant" if all_ok else "❌ Non-compliant"
 
-    st.success("✅ Analysis complete (rule-based). Ready for reviewer evaluation.")
+    # pesan format lebih informatif
+    if all_ok:
+        st.success("✅ All required sections are present. Format is COMPLIANT.")
+    else:
+        st.warning(
+            "❌ Format is NOT compliant. Missing sections: "
+            + ", ".join(s.title() for s in missing_sections)
+        )
 
     # tampilkan hasil format
     st.markdown("<h5 style='color:#2c3e50;'>🔹 Format Features</h5>", unsafe_allow_html=True)
@@ -253,31 +296,48 @@ if pdf_file:
             key=f"{file_key}_overall_eval"
         )
 
+        # === VALIDASI sebelum submit ===
         if st.button("Submit Review", key=f"{file_key}_submit"):
-            summary = {
-                **detected,
-                "advisor": advisor,
-                "reviewed_by": reviewed_by,
-                "english_ok": english_ok,
-                "english_issue": english_issue,
-                "format_ok": format_ok,
-                "format_comment": format_comment,
-                "sota_ok": sota_ok,
-                "clarity_ok": clarity_ok,
-                "figures_ok": figures_ok,
-                "figures_comment": figures_comment,
-                "conclusion_ok": conclusion_ok,
-                "conclusion_comment": conclusion_comment,
-                "references_ok": references_ok,
-                "references_comment": references_comment,
-                "recommendations": recommendations,
-                "overall_eval": overall_eval,
-                "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            }
-            if "review_all" not in st.session_state:
-                st.session_state.review_all = []
-            st.session_state.review_all.append(summary)
-            st.success("✅ Review form submitted.")
+            errors = []
+
+            if not advisor.strip():
+                errors.append("• Advisor is required.")
+            if not reviewed_by.strip():
+                errors.append("• Reviewer name is required.")
+            if overall_eval.strip() == "":
+                errors.append("• Overall Evaluation is required.")
+
+            if english_ok is None or format_ok is None or sota_ok is None or clarity_ok is None:
+                errors.append("• Please answer all Yes/No questions.")
+
+            if errors:
+                st.warning("Please complete the following before submitting:\n" + "\n".join(errors))
+            else:
+                summary = {
+                    **detected,
+                    "advisor": advisor,
+                    "reviewed_by": reviewed_by,
+                    "english_ok": english_ok,
+                    "english_issue": english_issue,
+                    "format_ok": format_ok,
+                    "format_comment": format_comment,
+                    "sota_ok": sota_ok,
+                    "clarity_ok": clarity_ok,
+                    "figures_ok": figures_ok,
+                    "figures_comment": figures_comment,
+                    "conclusion_ok": conclusion_ok,
+                    "conclusion_comment": conclusion_comment,
+                    "references_ok": references_ok,
+                    "references_comment": references_comment,
+                    "recommendations": recommendations,
+                    "overall_eval": overall_eval,
+                    "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                }
+                if "review_all" not in st.session_state:
+                    st.session_state.review_all = []
+                st.session_state.review_all.append(summary)
+                st.success("✅ Review form submitted.")
+
 
 # === Tampilkan hasil review semua ===
 if "review_all" in st.session_state and st.session_state.review_all:
