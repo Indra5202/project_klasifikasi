@@ -53,19 +53,12 @@ st.markdown("---")
 st.markdown("<h4 style='color:#f39c12;'>📁 Upload PDF File</h4>", unsafe_allow_html=True)
 pdf_file = st.file_uploader("Upload a PDF", type="pdf")
 
-
 # === RESET STATE JIKA FILE BERGANTI ===
 if pdf_file is not None:
     new_name = pdf_file.name
-    # kalau belum ada current_pdf atau nama file berbeda → reset form
     if st.session_state.get("current_pdf") != new_name:
-        # backup dulu rekap review kalau ada
         review_all_backup = st.session_state.get("review_all", [])
-
-        # bersihkan seluruh session_state (supaya form kosong lagi)
         st.session_state.clear()
-
-        # restore rekap dan set nama pdf aktif
         st.session_state["review_all"] = review_all_backup
         st.session_state["current_pdf"] = new_name
 
@@ -73,9 +66,7 @@ if pdf_file is not None:
 # === Fungsi bantu ===
 
 def detect_heading_presence(full_text: str, heading: str) -> int:
-    """
-    Mengembalikan 1 jika heading ditemukan di teks (case-insensitive), selain itu 0.
-    """
+    """Mengembalikan 1 jika heading ditemukan di teks (case-insensitive), selain itu 0."""
     if not full_text:
         return 0
     return 1 if heading.lower() in full_text.lower() else 0
@@ -83,8 +74,8 @@ def detect_heading_presence(full_text: str, heading: str) -> int:
 
 def extract_title(lines):
     """
-    Heuristik untuk mengekstrak judul paper dari lines halaman pertama.
-    Menghindari baris yang berisi 'Contents list', info jurnal, dll.
+    Heuristik untuk mengekstrak judul paper dari halaman pertama.
+    Menggabungkan beberapa baris judul jika terpisah (seperti contoh ACMIT).
     """
     blacklist = [
         "journal", "proceedings", "sciencedirect", "science direct",
@@ -93,65 +84,88 @@ def extract_title(lines):
         "open access", "license", "creativecommons"
     ]
 
-    # Cek hanya 40 baris pertama (bagian atas paper)
-    for line in lines[:40]:
+    max_lookahead = 4  # maksimal 4 baris lanjutan judul
+
+    # cek hanya 40 baris pertama (bagian atas paper)
+    for i, line in enumerate(lines[:40]):
         clean = line.strip()
         if not clean:
             continue
 
-        # minimal 5 kata agar tidak kepilih text pendek
-        if len(clean.split()) < 5:
+        # minimal 3 kata supaya bukan text pendek
+        if len(clean.split()) < 3:
             continue
 
-        # jangan ambil baris yang mengandung kata blacklist
-        if any(word in clean.lower() for word in blacklist):
+        low = clean.lower()
+        if any(word in low for word in blacklist):
             continue
 
-        # hindari baris penuh angka (tahun, volume, dsb)
-        if any(char.isdigit() for char in clean):
+        # jangan pakai baris yang mayoritas angka/metadata
+        if sum(ch.isdigit() for ch in clean) > 4:
             continue
 
-        return clean  # judul ditemukan
+        # kandidat judul ditemukan → cek apakah ada lanjutan judul di baris berikutnya
+        title_lines = [clean]
+        last_idx = i
 
-    # fallback: kalau tidak ketemu pakai baris pertama yang tidak kosong
-    for line in lines:
+        for j in range(i + 1, min(i + 1 + max_lookahead, len(lines))):
+            nxt = lines[j].strip()
+            if not nxt:
+                break
+            nxt_low = nxt.lower()
+
+            # berhenti kalau ketemu abstract / section / info jurnal
+            if "abstract" in nxt_low:
+                break
+            if any(word in nxt_low for word in blacklist):
+                break
+
+            # kalau banyak angka, kemungkinan bukan judul (misal afiliasi / tahun)
+            if sum(ch.isdigit() for ch in nxt) > 3:
+                break
+
+            # jika kata-kata masih kapital & tidak terlalu panjang → kemungkinan lanjutan judul
+            if len(nxt.split()) >= 2 and len(nxt.split()) <= 12:
+                title_lines.append(nxt)
+                last_idx = j
+            else:
+                break
+
+        return " ".join(title_lines), last_idx
+
+    # fallback kalau tidak ketemu
+    for i, line in enumerate(lines):
         clean = line.strip()
         if clean:
-            return clean
-    return ""
+            return clean, i
+    return "", -1
 
 
-def extract_author(lines, title):
+def extract_author(lines, start_idx):
     """
-    Heuristik untuk mengekstrak baris nama author.
-    Diasumsikan muncul SETELAH title dan berisi beberapa nama dengan huruf kapital.
+    Heuristik mengekstrak baris nama author.
+    Mencari di beberapa baris setelah judul (start_idx).
     """
-    found_title = False
+    if start_idx < 0:
+        search_start = 0
+    else:
+        search_start = start_idx + 1
 
-    for line in lines:
+    for line in lines[search_start: search_start + 10]:
         clean = line.strip()
         if not clean:
             continue
 
-        # tandai saat melewati title
-        if clean == title:
-            found_title = True
-            continue
-
-        if not found_title:
-            continue
-
-        # setelah title: baris kandidat author
         words = clean.split()
-        if not (2 <= len(words) <= 20):
+        if not (2 <= len(words) <= 25):
             continue
 
-        # butuh minimal 2 kata yang kapital
+        # butuh minimal 2 kata kapital (nama)
         cap_words = [w for w in words if w[0].isupper()]
         if len(cap_words) < 2:
             continue
 
-        # biasanya ada koma / titik / tanda a,b,* dsb
+        # biasanya ada koma / and / titik
         if "," in clean or ";" in clean or " and " in clean.lower() or "." in clean:
             return clean
 
@@ -160,7 +174,7 @@ def extract_author(lines, title):
 
 # === Proses jika ada file PDF ===
 if pdf_file:
-    # Baca teks dari PDF
+    # baca teks dari PDF
     text = ""
     with fitz.open(stream=pdf_file.read(), filetype="pdf") as doc:
         for page in doc:
@@ -168,11 +182,11 @@ if pdf_file:
 
     lines = text.split("\n") if text else []
 
-    # Pakai heuristik baru untuk title dan author
-    title = extract_title(lines)
-    student_author_line = extract_author(lines, title)
+    # pakai heuristik baru
+    title, title_last_idx = extract_title(lines)
+    student_author_line = extract_author(lines, title_last_idx)
 
-    # Deteksi heading berdasarkan outline baru
+    # deteksi heading berdasarkan outline baru
     detected = {
         "file_name": pdf_file.name,
         "title": title,
@@ -182,13 +196,13 @@ if pdf_file:
     for heading in HEADINGS:
         detected[heading.capitalize()] = detect_heading_presence(text, heading)
 
-    # === Evaluasi rule-based: compliant jika SEMUA heading ada ===
+    # evaluasi rule-based: compliant jika SEMUA heading ada
     all_ok = all(detected[h.capitalize()] == 1 for h in HEADINGS)
     detected["status"] = "✅ Compliant" if all_ok else "❌ Non-compliant"
 
     st.success("✅ Analysis complete (rule-based). Ready for reviewer evaluation.")
 
-    # === Tampilkan hasil format ===
+    # tampilkan hasil format
     st.markdown("<h5 style='color:#2c3e50;'>🔹 Format Features</h5>", unsafe_allow_html=True)
     df_format = pd.DataFrame([detected])
     st.dataframe(df_format, use_container_width=True)
@@ -263,7 +277,6 @@ if pdf_file:
                 st.session_state.review_all = []
             st.session_state.review_all.append(summary)
             st.success("✅ Review form submitted.")
-
 
 # === Tampilkan hasil review semua ===
 if "review_all" in st.session_state and st.session_state.review_all:
