@@ -70,7 +70,8 @@ if pdf_file is not None:
         st.session_state["current_pdf"] = new_name
 
 
-# Fungsi bantu: deteksi heading di teks
+# === Fungsi bantu ===
+
 def detect_heading_presence(full_text: str, heading: str) -> int:
     """
     Mengembalikan 1 jika heading ditemukan di teks (case-insensitive), selain itu 0.
@@ -78,6 +79,83 @@ def detect_heading_presence(full_text: str, heading: str) -> int:
     if not full_text:
         return 0
     return 1 if heading.lower() in full_text.lower() else 0
+
+
+def extract_title(lines):
+    """
+    Heuristik untuk mengekstrak judul paper dari lines halaman pertama.
+    Menghindari baris yang berisi 'Contents list', info jurnal, dll.
+    """
+    blacklist = [
+        "journal", "proceedings", "sciencedirect", "science direct",
+        "elsevier", "www.", "http", "received", "accepted",
+        "available online", "contents list", "volume", "issue",
+        "open access", "license", "creativecommons"
+    ]
+
+    # Cek hanya 40 baris pertama (bagian atas paper)
+    for line in lines[:40]:
+        clean = line.strip()
+        if not clean:
+            continue
+
+        # minimal 5 kata agar tidak kepilih text pendek
+        if len(clean.split()) < 5:
+            continue
+
+        # jangan ambil baris yang mengandung kata blacklist
+        if any(word in clean.lower() for word in blacklist):
+            continue
+
+        # hindari baris penuh angka (tahun, volume, dsb)
+        if any(char.isdigit() for char in clean):
+            continue
+
+        return clean  # judul ditemukan
+
+    # fallback: kalau tidak ketemu pakai baris pertama yang tidak kosong
+    for line in lines:
+        clean = line.strip()
+        if clean:
+            return clean
+    return ""
+
+
+def extract_author(lines, title):
+    """
+    Heuristik untuk mengekstrak baris nama author.
+    Diasumsikan muncul SETELAH title dan berisi beberapa nama dengan huruf kapital.
+    """
+    found_title = False
+
+    for line in lines:
+        clean = line.strip()
+        if not clean:
+            continue
+
+        # tandai saat melewati title
+        if clean == title:
+            found_title = True
+            continue
+
+        if not found_title:
+            continue
+
+        # setelah title: baris kandidat author
+        words = clean.split()
+        if not (2 <= len(words) <= 20):
+            continue
+
+        # butuh minimal 2 kata yang kapital
+        cap_words = [w for w in words if w[0].isupper()]
+        if len(cap_words) < 2:
+            continue
+
+        # biasanya ada koma / titik / tanda a,b,* dsb
+        if "," in clean or ";" in clean or " and " in clean.lower() or "." in clean:
+            return clean
+
+    return ""
 
 
 # === Proses jika ada file PDF ===
@@ -90,18 +168,9 @@ if pdf_file:
 
     lines = text.split("\n") if text else []
 
-    # Cari judul (heuristic sederhana)
-    title = next((line.strip() for line in lines if line and line[0].isupper()), lines[0].strip() if lines else "")
-
-    # Cari line yang kemungkinan berisi nama penulis (heuristic)
-    student_author_line = next(
-        (
-            line.strip()
-            for line in lines
-            if any(char.isalpha() for char in line) and ("," in line or ";" in line)
-        ),
-        ""
-    )
+    # Pakai heuristik baru untuk title dan author
+    title = extract_title(lines)
+    student_author_line = extract_author(lines, title)
 
     # Deteksi heading berdasarkan outline baru
     detected = {
