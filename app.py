@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import fitz  # PyMuPDF
 from datetime import datetime
+from streamlit.components.v1 import html  # untuk warning sebelum refresh/close
 
 # === Konfigurasi halaman ===
 st.set_page_config(page_title="Paper Format Classifier", layout="wide")
@@ -73,7 +74,7 @@ st.markdown("""
        <h1 style="font-size:50px; color:#2c5d94; text-align:center;">SWISS GERMAN UNIVERSITY</h1>
        <h1 style="font-size:50px; color:#2c5d94; text-align:center;">Paper Review ACMIT</h1>
        <p style='font-size:16px; color:gray;'>
-           Upload one paper PDF and let the app automatically check format structure compliance (rule-based, without ML).
+           Upload one paper PDF and let the app automatically check format structure compliance.
        </p>
     </div>
 </div>
@@ -307,7 +308,15 @@ if pdf_file:
             if overall_eval.strip() == "":
                 errors.append("• Overall Evaluation is required.")
 
-            if english_ok is None or format_ok is None or sota_ok is None or clarity_ok is None:
+            if (
+                english_ok is None
+                or format_ok is None
+                or sota_ok is None
+                or clarity_ok is None
+                or figures_ok is None
+                or conclusion_ok is None
+                or references_ok is None
+            ):
                 errors.append("• Please answer all Yes/No questions.")
 
             if errors:
@@ -338,7 +347,6 @@ if pdf_file:
                 st.session_state.review_all.append(summary)
                 st.success("✅ Review form submitted.")
 
-
 # === Tampilkan hasil review semua ===
 if "review_all" in st.session_state and st.session_state.review_all:
     st.markdown("### 🚀 Final Review Summary (All Sessions)")
@@ -364,3 +372,14 @@ if "review_all" in st.session_state and st.session_state.review_all:
         "review_summary.csv",
         "text/csv"
     )
+
+    # === Warning jika user mau refresh/close saat ada data review ===
+    html("""
+    <script>
+    window.addEventListener('beforeunload', function (e) {
+        var confirmationMessage = 'Reloading this page will clear the current review data that has not been downloaded. Are you sure?';
+        (e || window.event).returnValue = confirmationMessage;
+        return confirmationMessage;
+    });
+    </script>
+    """)
