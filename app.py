@@ -1,649 +1,267 @@
 import streamlit as st
 import pandas as pd
-import fitz  # PyMuPDF
-from datetime import datetime
-from streamlit.components.v1 import html
-
+import datetime
 import gspread
 from google.oauth2.service_account import Credentials
 
-# ============================================================
-# KONFIGURASI
-# ============================================================
+st.set_page_config(page_title="ACMIT Paper Review", layout="wide")
 
-SHEET_NAME = "ACMIT_Reviews_2025"  # hanya label, koneksi pakai ID
-
-USERS = {
-    "admin": {"password": "admin123", "role": "Admin"},
-    "reviewer1": {"password": "rev123", "role": "Reviewer"},
-    "reviewer2": {"password": "rev456", "role": "Reviewer"},
-}
-
-HEADINGS = [
-    "introduction",
-    "materials and methods",
-    "results and discussion",
-    "conclusion",
-    "references",
-]
-
-SECTION_SYNONYMS = {
-    "introduction": ["introduction", "intro"],
-    "materials and methods": [
-        "materials and methods",
-        "material and methods",
-        "materials & methods",
-        "materials and method",
-        "methodology",
-        "methods and materials",
-    ],
-    "results and discussion": [
-        "results and discussion",
-        "result and discussion",
-        "results & discussion",
-        "results",
-        "discussion",
-    ],
-    "conclusion": ["conclusion", "conclusions", "concluding remarks"],
-    "references": ["references", "reference", "bibliography"],
-}
-
-COLUMNS = [
-    "timestamp",
-    "reviewer_user",
-    "reviewer_role",
-    "file_name",
-    "title",
-    "student_author",
-    "status",
-    "Introduction",
-    "Materials and methods",
-    "Results and discussion",
-    "Conclusion",
-    "References",
-    "advisor",
-    "reviewed_by",
-    "english_ok",
-    "english_issue",
-    "format_ok",
-    "format_comment",
-    "sota_ok",
-    "clarity_ok",
-    "figures_ok",
-    "figures_comment",
-    "conclusion_ok",
-    "conclusion_comment",
-    "references_ok",
-    "references_comment",
-    "recommendations",
-    "overall_eval",
-]
-
-# ============================================================
-# SETUP STREAMLIT
-# ============================================================
-
-st.set_page_config(page_title="Paper Review ACMIT", layout="wide")
-
-st.markdown(
-    """
-    <style>
-        .centered-logo-title {
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            gap: 1rem;
-            margin-bottom: 1rem;
-        }
-        .centered-logo-title img {
-            height: 60px;
-        }
-        .stTextInput > div > div > input {
-            text-align: left;
-        }
-    </style>
-""",
-    unsafe_allow_html=True,
-)
-
-# ============================================================
-# GOOGLE SHEETS HELPER
-# ============================================================
+# =======================================================
+# LOAD SERVICE ACCOUNT & GOOGLE SHEET
+# =======================================================
+def get_gsheet_client():
+    service_info = st.secrets["google_service_account"]
+    creds = Credentials.from_service_account_info(
+        service_info,
+        scopes=["https://www.googleapis.com/auth/spreadsheets"]
+    )
+    return gspread.authorize(creds)
 
 
-def get_worksheet():
-    """
-    Konek ke Google Sheet berdasarkan ID dan kembalikan worksheet pertama.
+def load_reviews_from_sheet():
+    try:
+        gc = get_gsheet_client()
+        sh = gc.open_by_key(st.secrets["google_sheet_id"])
+        ws = sh.sheet1
+        data = ws.get_all_records()
+        if not data:
+            return pd.DataFrame()
+        return pd.DataFrame(data)
+    except Exception as e:
+        st.error(f"Error loading Google Sheets: {e}")
+        return pd.DataFrame()
 
-    ID bisa disimpan di:
-    - st.secrets["google_sheet_id"]  (top-level), atau
-    - st.secrets["google_service_account"]["google_sheet_id"]
-    """
-    scopes = [
-        "https://www.googleapis.com/auth/spreadsheets",
-        "https://www.googleapis.com/auth/drive",
-    ]
 
-    creds_info = st.secrets["google_service_account"]
-    creds = Credentials.from_service_account_info(creds_info, scopes=scopes)
-    client = gspread.authorize(creds)
-
-    sheet_id = st.secrets.get("google_sheet_id", None)
-    if sheet_id is None:
-        sheet_id = creds_info.get("google_sheet_id", None)
-
-    if sheet_id is None:
-        raise KeyError(
-            'google_sheet_id not found in secrets. '
-            'Tambahkan "google_sheet_id = \\"...ID...\\"" di secrets '
-            "atau di dalam [google_service_account]."
-        )
-
-    sh = client.open_by_key(sheet_id)
+def append_review_to_sheet(row_dict):
+    gc = get_gsheet_client()
+    sh = gc.open_by_key(st.secrets["google_sheet_id"])
     ws = sh.sheet1
-    return ws
+
+    # Jika sheet kosong → tulis header dulu
+    if len(ws.get_all_values()) == 0:
+        ws.append_row(list(row_dict.keys()))
+
+    ws.append_row(list(row_dict.values()))
+    return True
 
 
-def save_review_to_sheet(summary: dict):
-    """
-    Simpan satu review ke Google Sheet.
-    SELALU tulis ke baris baru (ke bawah), bukan ke samping.
-    """
-    try:
-        ws = get_worksheet()
-        values = ws.get_all_values()  # 2D list
+# =======================================================
+# USER & SESSION MANAGEMENT
+# =======================================================
+users = {
+    "admin": {"password": "admin123", "role": "Admin"},
+    "reviewer1": {"password": "rev1", "role": "Reviewer"},
+    "reviewer2": {"password": "rev2", "role": "Reviewer"},
+}
 
-        # Kalau sheet kosong -> tulis header di A1
-        if not values:
-            ws.update("A1", [COLUMNS])
-            values = [COLUMNS]
-
-        # next_row = jumlah baris yang sudah terisi + 1
-        next_row = len(values) + 1
-        row_values = [[summary.get(col, "") for col in COLUMNS]]
-
-        ws.update(f"A{next_row}", row_values)
-
-        st.toast("✅ Saved to Google Sheets", icon="✅")
-    except Exception as e:
-        st.error(f"❌ Error saving to Google Sheets: {e}")
+if "logged_in" not in st.session_state:
+    st.session_state.logged_in = False
+if "username" not in st.session_state:
+    st.session_state.username = None
+if "role" not in st.session_state:
+    st.session_state.role = None
 
 
-def load_reviews_from_sheet() -> pd.DataFrame:
-    """
-    Load semua review dari Google Sheet ke DataFrame.
-    """
-    try:
-        ws = get_worksheet()
-        values = ws.get_all_values()
-    except Exception as e:
-        st.error(f"❌ Error loading from Google Sheets: {e}")
-        return pd.DataFrame(columns=COLUMNS)
-
-    if not values or len(values) == 1:
-        return pd.DataFrame(columns=COLUMNS)
-
-    header = values[0]
-    rows = values[1:]
-    df = pd.DataFrame(rows, columns=header)
-
-    for col in COLUMNS:
-        if col not in df.columns:
-            df[col] = ""
-
-    return df
+def login(username, password):
+    if username in users and users[username]["password"] == password:
+        st.session_state.logged_in = True
+        st.session_state.username = username
+        st.session_state.role = users[username]["role"]
+        return True
+    return False
 
 
-# ============================================================
-# LOGIN BLOCK
-# ============================================================
+def logout():
+    st.session_state.logged_in = False
+    st.session_state.username = None
+    st.session_state.role = None
 
 
-def login_block():
-    st.sidebar.title("Login Reviewer")
+# =======================================================
+# SIDEBAR LOGIN
+# =======================================================
+with st.sidebar:
+    st.title("Login Reviewer")
+    if not st.session_state.logged_in:
+        username = st.text_input("Username")
+        password = st.text_input("Password", type="password")
+        if st.button("Login"):
+            if not login(username, password):
+                st.error("Invalid username or password")
+    else:
+        st.success(f"Logged in as {st.session_state.username} ({st.session_state.role})")
+        st.button("Logout", on_click=logout)
 
-    username = st.sidebar.text_input("Username")
-    password = st.sidebar.text_input("Password", type="password")
-
-    if st.sidebar.button("Login"):
-        user = USERS.get(username)
-        if user and user["password"] == password:
-            st.session_state["user"] = username
-            st.session_state["role"] = user["role"]
-            st.sidebar.success(f"Logged in as {username} ({user['role']})")
-        else:
-            st.sidebar.error("Invalid username or password")
-
-    if "user" in st.session_state:
-        if st.sidebar.button("Logout"):
-            for k in list(st.session_state.keys()):
-                del st.session_state[k]
-            st.rerun()
-
-
-login_block()
-
-if "user" not in st.session_state:
-    st.info("Please login from the left sidebar to use the app.")
+# Stop if not logged in
+if not st.session_state.logged_in:
     st.stop()
 
-current_user = st.session_state["user"]
-current_role = st.session_state["role"]
+current_user = st.session_state.username
+current_role = st.session_state.role
 
-# ============================================================
-# HEADER UI
-# ============================================================
+# =======================================================
+# HEADER
+# =======================================================
+st.markdown("""
+# <div style="text-align:center;">SWISS GERMAN UNIVERSITY</div>
+# <div style="text-align:center; color:#2e6f9e;">Paper Review ACMIT</div>
+""", unsafe_allow_html=True)
 
-st.markdown(
-    f"""
-<div class='centered-logo-title'>
-    <div>
-       <h1 style="font-size:50px; color:#2c5d94; text-align:center;">SWISS GERMAN UNIVERSITY</h1>
-       <h1 style="font-size:50px; color:#2c5d94; text-align:center;">Paper Review ACMIT</h1>
-       <p style='font-size:16px; color:gray; text-align:center;'>
-           Logged in as <b>{current_user}</b> ({current_role})
-       </p>
-       <p style='font-size:14px; color:gray; text-align:center;'>
-           Upload one paper PDF and let the app automatically check format structure compliance (rule-based, without ML).
-       </p>
-    </div>
-</div>
-""",
-    unsafe_allow_html=True,
-)
+st.write(f"Logged in as **{current_user}** ({current_role})")
 
-st.markdown("---")
-
-# ============================================================
-# HELPER PDF & TITLE/AUTHOR HEURISTIC
-# ============================================================
-
-
-def detect_heading_presence(full_text: str, section_key: str) -> int:
-    if not full_text:
-        return 0
-    text_low = full_text.lower()
-    for phrase in SECTION_SYNONYMS.get(section_key, [section_key]):
-        if phrase.lower() in text_low:
-            return 1
-    return 0
-
-
-def extract_title(lines):
-    blacklist = [
-        "journal",
-        "proceedings",
-        "sciencedirect",
-        "science direct",
-        "elsevier",
-        "www.",
-        "http",
-        "received",
-        "accepted",
-        "available online",
-        "contents list",
-        "volume",
-        "issue",
-        "open access",
-        "license",
-        "creativecommons",
-    ]
-    max_lookahead = 4
-
-    for i, line in enumerate(lines[:40]):
-        clean = line.strip()
-        if not clean:
-            continue
-        if len(clean.split()) < 3:
-            continue
-
-        low = clean.lower()
-        if any(word in low for word in blacklist):
-            continue
-        if sum(ch.isdigit() for ch in clean) > 4:
-            continue
-
-        title_lines = [clean]
-        last_idx = i
-
-        for j in range(i + 1, min(i + 1 + max_lookahead, len(lines))):
-            nxt = lines[j].strip()
-            if not nxt:
-                break
-            nxt_low = nxt.lower()
-
-            if "abstract" in nxt_low:
-                break
-            if any(word in nxt_low for word in blacklist):
-                break
-            if any(ch.isdigit() for ch in nxt):
-                break
-
-            if 2 <= len(nxt.split()) <= 12:
-                title_lines.append(nxt)
-                last_idx = j
-            else:
-                break
-
-        return " ".join(title_lines), last_idx
-
-    for i, line in enumerate(lines):
-        clean = line.strip()
-        if clean:
-            return clean, i
-    return "", -1
-
-
-def extract_author(lines, start_idx):
-    if start_idx < 0:
-        search_start = 0
-    else:
-        search_start = start_idx + 1
-
-    for line in lines[search_start : search_start + 10]:
-        clean = line.strip()
-        if not clean:
-            continue
-
-        words = clean.split()
-        if not (2 <= len(words) <= 25):
-            continue
-
-        cap_words = [w for w in words if w[0].isupper()]
-        if len(cap_words) < 2:
-            continue
-
-        if (
-            "," in clean
-            or ";" in clean
-            or " and " in clean.lower()
-            or "." in clean
-        ):
-            return clean
-
-    return ""
-
-
-# ============================================================
-# BAGIAN UPLOAD & REVIEW (HANYA REVIEWER)
-# ============================================================
-
+# =======================================================
+# REVIEWER PANEL
+# =======================================================
 if current_role == "Reviewer":
-    st.markdown(
-        "<h4 style='color:#f39c12;'>📁 Upload PDF File</h4>", unsafe_allow_html=True
-    )
-    pdf_file = st.file_uploader("Upload a PDF", type="pdf")
 
-    if pdf_file:
-        file_key = (
-            f"{current_user}_" + pdf_file.name.replace(".", "_").replace(" ", "_")
-        )
+    st.markdown("## 📁 Upload PDF File")
+    pdf = st.file_uploader("Upload a PDF", type=["pdf"])
 
-        text = ""
-        with fitz.open(stream=pdf_file.read(), filetype="pdf") as doc:
-            for page in doc:
-                text += page.get_text()
+    st.markdown("## ⭐ Reviewer Evaluation Form")
 
-        lines = text.split("\n") if text else []
+    title = st.text_input("Paper Title")
+    student_author = st.text_input("Student Author(s)")
+    advisor = st.text_input("Advisor")
+    reviewed_by = st.text_input("Reviewed by (Name)")
 
-        title, title_last_idx = extract_title(lines)
-        student_author_line = extract_author(lines, title_last_idx)
+    st.write("### Format Checks")
+    intro = st.selectbox("Introduction correct?", ["1", "0"])
+    methods = st.selectbox("Materials & Methods correct?", ["1", "0"])
+    results = st.selectbox("Results & Discussion correct?", ["1", "0"])
+    conclusion = st.selectbox("Conclusion correct?", ["1", "0"])
+    references = st.selectbox("References correct?", ["1", "0"])
 
-        detected = {
-            "file_name": pdf_file.name,
-            "title": title,
-            "student_author": student_author_line,
-            "reviewer_user": current_user,
-            "reviewer_role": current_role,
-        }
+    st.write("### Subjective Evaluation")
+    english_ok = st.selectbox("English OK?", ["Yes", "No"])
+    format_ok = st.selectbox("Format OK?", ["Yes", "No"])
+    sota_ok = st.selectbox("SOTA OK?", ["Yes", "No"])
+    clarity_ok = st.selectbox("Clarity OK?", ["Yes", "No"])
+    figures_ok = st.selectbox("Figures OK?", ["Yes", "No"])
+    conclusion_ok = st.selectbox("Conclusion OK?", ["Yes", "No"])
+    references_ok = st.selectbox("References OK?", ["Yes", "No"])
+    recommendations = st.text_area("Reviewer Recommendations")
+    overall_eval = st.selectbox("Overall Evaluation", ["Full acceptance", "Accept with revision"])
 
-        for heading in HEADINGS:
-            detected[heading.capitalize()] = detect_heading_presence(text, heading)
-
-        missing_sections = [
-            h for h in HEADINGS if detected[h.capitalize()] == 0
-        ]
-        all_ok = len(missing_sections) == 0
-        detected["status"] = (
-            "✅ Compliant" if all_ok else "❌ Non-compliant"
-        )
-
-        if all_ok:
-            st.success(
-                "✅ All required sections are present. Format is COMPLIANT."
-            )
+    if st.button("Submit Review"):
+        if not pdf:
+            st.error("PDF is required.")
         else:
-            st.warning(
-                "❌ Format is NOT compliant. Missing sections: "
-                + ", ".join(s.title() for s in missing_sections)
-            )
+            now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+            file_name = pdf.name
 
-        st.markdown(
-            "<h5 style='color:#2c3e50;'>🔹 Format Features</h5>",
-            unsafe_allow_html=True,
-        )
-        df_format = pd.DataFrame([detected])
-        st.dataframe(df_format, use_container_width=True)
+            row = {
+                "timestamp": now,
+                "reviewer_user": current_user,
+                "reviewer_role": "Reviewer",
+                "file_name": file_name,
+                "title": title,
+                "student_author": student_author,
+                "status": "Compliant" if all(x == "1" for x in [intro, methods, results, conclusion, references]) else "Non-compliant",
+                "Introduction": intro,
+                "Materials and methods": methods,
+                "Results and discussion": results,
+                "Conclusion": conclusion,
+                "References": references,
+                "advisor": advisor,
+                "reviewed_by": reviewed_by,
+                "english_ok": english_ok,
+                "format_ok": format_ok,
+                "sota_ok": sota_ok,
+                "clarity_ok": clarity_ok,
+                "figures_ok": figures_ok,
+                "conclusion_ok": conclusion_ok,
+                "references_ok": references_ok,
+                "recommendations": recommendations,
+                "overall_eval": overall_eval,
+            }
 
-        st.markdown("---")
+            append_review_to_sheet(row)
+            st.success("Review submitted & saved to Google Sheet.")
 
-        st.markdown(
-            "<h5 style='color:#e74c3c;'>🔴 Reviewer Evaluation</h5>",
-            unsafe_allow_html=True,
-        )
-
-        with st.expander(f"📄 Review: {detected['file_name']}"):
-            advisor = st.text_input("Advisor:", key=f"{file_key}_advisor")
-            reviewed_by = st.text_input(
-                "Reviewer name:", key=f"{file_key}_reviewer"
-            )
-
-            def radio_with_comment(question, key_prefix):
-                val = st.radio(
-                    question,
-                    ["Yes", "No"],
-                    index=None,
-                    key=f"{file_key}_{key_prefix}_val",
-                )
-                comment = ""
-                if val == "No":
-                    comment = st.text_area(
-                        f"{question} - Comments:",
-                        key=f"{file_key}_{key_prefix}_comment",
-                    )
-                return val, comment
-
-            english_ok, english_issue = radio_with_comment(
-                "Is the manuscript written in proper and sound English?",
-                "english",
-            )
-            format_ok, format_comment = radio_with_comment(
-                "Format follows author guideline?", "format"
-            )
-            sota_ok = st.radio(
-                "Is the problem state-of-the-art?",
-                ["Yes", "No"],
-                index=None,
-                key=f"{file_key}_sota",
-            )
-            clarity_ok = st.radio(
-                "Is the problem clearly stated?",
-                ["Yes", "No"],
-                index=None,
-                key=f"{file_key}_clarity",
-            )
-            figures_ok, figures_comment = radio_with_comment(
-                "Do figures/tables support the goal/result?", "figures"
-            )
-            conclusion_ok, conclusion_comment = radio_with_comment(
-                "Does the conclusion answer the problem?", "conclusion"
-            )
-            references_ok, references_comment = radio_with_comment(
-                "Are references up-to-date?", "references"
-            )
-
-            recommendations = st.text_area(
-                "Recommendations:", key=f"{file_key}_recommend"
-            )
-            overall_eval = st.selectbox(
-                "Overall Evaluation",
-                ["", "Reject", "Accept with revision", "Full acceptance"],
-                key=f"{file_key}_overall_eval",
-            )
-
-            if st.button("Submit Review", key=f"{file_key}_submit"):
-                errors = []
-
-                if not advisor.strip():
-                    errors.append("• Advisor is required.")
-                if not reviewed_by.strip():
-                    errors.append("• Reviewer name is required.")
-                if overall_eval.strip() == "":
-                    errors.append("• Overall Evaluation is required.")
-
-                if (
-                    english_ok is None
-                    or format_ok is None
-                    or sota_ok is None
-                    or clarity_ok is None
-                    or figures_ok is None
-                    or conclusion_ok is None
-                    or references_ok is None
-                ):
-                    errors.append("• Please answer all Yes/No questions.")
-
-                if errors:
-                    st.warning(
-                        "Please complete the following before submitting:\n"
-                        + "\n".join(errors)
-                    )
-                else:
-                    summary = {
-                        **detected,
-                        "advisor": advisor,
-                        "reviewed_by": reviewed_by,
-                        "english_ok": english_ok,
-                        "english_issue": english_issue,
-                        "format_ok": format_ok,
-                        "format_comment": format_comment,
-                        "sota_ok": sota_ok,
-                        "clarity_ok": clarity_ok,
-                        "figures_ok": figures_ok,
-                        "figures_comment": figures_comment,
-                        "conclusion_ok": conclusion_ok,
-                        "conclusion_comment": conclusion_comment,
-                        "references_ok": references_ok,
-                        "references_comment": references_comment,
-                        "recommendations": recommendations,
-                        "overall_eval": overall_eval,
-                        "timestamp": datetime.now().strftime(
-                            "%Y-%m-%d %H:%M:%S"
-                        ),
-                    }
-                    save_review_to_sheet(summary)
-                    try:
-                        ws_debug = get_worksheet()
-                        total_rows = max(
-                            len(ws_debug.get_all_values()) - 1, 0
-                        )
-                        st.info(
-                            f"Total reviews saved in Google Sheets: {total_rows}"
-                        )
-                    except Exception as e:
-                        st.warning(
-                            f"Could not read back from Google Sheet: {e}"
-                        )
-                    st.success(
-                        "✅ Review submitted & saved to central Google Sheet."
-                    )
-
-elif current_role == "Admin":
-    st.info(
-        "You are logged in as Admin. Admin can view and download all reviews but cannot upload new papers or submit reviews."
-    )
-
-# ============================================================
-# FINAL REVIEW SUMMARY (dari Google Sheets)
-# ============================================================
+# =======================================================
+# ADMIN PANEL — FINAL REVIEW SUMMARY
+# =======================================================
+st.markdown("---")
+st.markdown("## 🧪 Final Review Summary (All Sessions)")
 
 df_all = load_reviews_from_sheet()
 
-if not df_all.empty:
-    st.markdown("### 🚀 Final Review Summary (All Sessions)")
-
+if df_all.empty:
+    st.info("No review data available yet.")
+else:
+    # Tambah nomor urut
     df_all.insert(0, "No", range(1, len(df_all) + 1))
 
-    if current_role == "Admin":
-        df_view = df_all.copy()
-    else:
-        df_view = df_all[df_all["reviewer_user"] == current_user].copy()
+    # ============================
+    # FILTER PANEL
+    # ============================
+    with st.expander("🔍 Filter & Search", expanded=True):
+
+        reviewers = sorted(df_all["reviewer_user"].dropna().unique())
+        statuses = sorted(df_all["status"].dropna().unique())
+
+        if current_role == "Admin":
+            sel_reviewer = st.multiselect("Reviewer", reviewers, default=reviewers)
+        else:
+            sel_reviewer = [current_user]
+
+        sel_status = st.multiselect("Status", statuses, default=statuses)
+
+        keyword = st.text_input("Search (title / author / file name)")
+
+    # Apply filter
+    df_view = df_all.copy()
+
+    if sel_reviewer:
+        df_view = df_view[df_view["reviewer_user"].isin(sel_reviewer)]
+    if sel_status:
+        df_view = df_view[df_view["status"].isin(sel_status)]
+    if keyword:
+        kw = keyword.lower()
+        df_view = df_view[
+            df_view["file_name"].str.lower().str.contains(kw)
+            | df_view["title"].str.lower().str.contains(kw)
+            | df_view["student_author"].str.lower().str.contains(kw)
+        ]
 
     if df_view.empty:
-        st.info("No reviews recorded yet for this user.")
+        st.warning("No data matches the filter.")
     else:
-        st.markdown("#### 🔹 Format Features")
+        # FORMAT FEATURES TABLE
+        st.markdown("### 🔹 Format Features")
         format_cols = [
-            "No",
-            "file_name",
-            "title",
-            "status",
-            "reviewer_user",
-            "reviewer_role",
-            "Introduction",
-            "Materials and methods",
-            "Results and discussion",
-            "Conclusion",
-            "References",
+            "No", "file_name", "title", "status",
+            "reviewer_user", "reviewer_role",
+            "Introduction", "Materials and methods",
+            "Results and discussion", "Conclusion", "References"
         ]
-        st.dataframe(
-            df_view[format_cols].set_index("No"), use_container_width=True
-        )
 
-        st.markdown("#### 🔴 Reviewer Evaluation")
-        subjective_cols = [
-            "No",
-            "file_name",
-            "title",
-            "student_author",
-            "advisor",
-            "reviewed_by",
-            "reviewer_user",
-            "reviewer_role",
-            "english_ok",
-            "format_ok",
-            "sota_ok",
-            "clarity_ok",
-            "figures_ok",
-            "conclusion_ok",
-            "references_ok",
-            "recommendations",
-            "overall_eval",
-            "timestamp",
+        st.dataframe(df_view[format_cols].set_index("No"), use_container_width=True)
+
+        # REVIEW EVALUATION TABLE
+        st.markdown("### 🔴 Reviewer Evaluation")
+        eval_cols = [
+            "No", "file_name", "title", "student_author",
+            "advisor", "reviewed_by", "reviewer_user", "reviewer_role",
+            "english_ok", "format_ok", "sota_ok", "clarity_ok", "figures_ok",
+            "conclusion_ok", "references_ok", "recommendations",
+            "overall_eval", "timestamp"
         ]
-        st.dataframe(
-            df_view[subjective_cols].set_index("No"),
-            use_container_width=True,
-        )
+
+        st.dataframe(df_view[eval_cols].set_index("No"), use_container_width=True)
 
         if current_role == "Admin":
             csv = df_all.to_csv(index=False).encode("utf-8")
-            st.download_button(
-                "💾 Download All Review Summary as CSV (Admin only)",
-                csv,
-                "review_summary.csv",
-                "text/csv",
-            )
+            st.download_button("💾 Download ALL Reviews (CSV)", csv, "reviews.csv")
 
-    html(
-        """
-    <script>
-    window.addEventListener('beforeunload', function (e) {
-        var confirmationMessage = 'Reloading this page will not delete saved reviews (they are in Google Sheets), but unsaved form data will be lost. Continue?';
-        (e || window.event).returnValue = confirmationMessage;
-        return confirmationMessage;
-    });
-    </script>
-    """
-    )
-else:
-    st.info("No reviews recorded yet.")
+# =======================================================
+# ANTI REFRESH WARNING
+# =======================================================
+st.markdown("""
+<script>
+window.addEventListener('beforeunload', function (e) {
+    e.preventDefault();
+    e.returnValue = '';
+});
+</script>
+""", unsafe_allow_html=True)
