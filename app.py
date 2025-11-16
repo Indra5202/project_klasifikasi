@@ -5,13 +5,13 @@ from datetime import datetime
 from streamlit.components.v1 import html
 
 import gspread
-from oauth2client.service_account import ServiceAccountCredentials
+from google.oauth2.service_account import Credentials
 
 # ============================================================
 # KONFIGURASI
 # ============================================================
 
-# Nama Google Sheet (FILE), bukan nama tab/worksheet
+# Nama FILE Google Sheet (bukan nama tab). Pastikan sama dengan di Google Drive.
 SHEET_NAME = "ACMIT_Reviews_2025"
 
 # User & Role
@@ -19,7 +19,8 @@ USERS = {
     "admin": {"password": "admin123", "role": "Admin"},
     "reviewer1": {"password": "rev123", "role": "Reviewer"},
     "reviewer2": {"password": "rev456", "role": "Reviewer"},
-    # bisa tambah lagi: "reviewer3": {"password": "...", "role": "Reviewer"},
+    # tambah reviewer lain kalau perlu:
+    # "reviewer3": {"password": "rev789", "role": "Reviewer"},
 }
 
 # Outline ACMIT
@@ -107,38 +108,53 @@ st.markdown("""
 # GOOGLE SHEETS HELPER
 # ============================================================
 
-@st.cache_resource
 def get_worksheet():
-    """Return worksheet (Sheet1) from Google Sheets."""
-    scope = [
-        "https://spreadsheets.google.com/feeds",
+    """
+    Konek ke Google Sheet (file) dan kembalikan worksheet pertama.
+    Menggunakan Credentials dari st.secrets["google_service_account"].
+    """
+    scopes = [
         "https://www.googleapis.com/auth/spreadsheets",
         "https://www.googleapis.com/auth/drive",
     ]
-    creds_dict = st.secrets["google_service_account"]
-    creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
+    creds_info = st.secrets["google_service_account"]
+    creds = Credentials.from_service_account_info(creds_info, scopes=scopes)
     client = gspread.authorize(creds)
-    sh = client.open(SHEET_NAME)   # buka file berdasarkan nama
+    sh = client.open(SHEET_NAME)   # buka file berdasarkan NAMA
     ws = sh.sheet1                 # pakai sheet/tab pertama
     return ws
 
 
 def save_review_to_sheet(summary: dict):
-    """Append satu baris review ke Google Sheet."""
-    ws = get_worksheet()
-    values = ws.get_all_values()
-    # kalau masih kosong -> tulis header dulu
-    if not values:
-        ws.append_row(COLUMNS)
+    """
+    Simpan satu review ke Google Sheet, dengan error handling & toast.
+    """
+    try:
+        ws = get_worksheet()
+        values = ws.get_all_values()
 
-    row = [summary.get(col, "") for col in COLUMNS]
-    ws.append_row(row)
+        # Kalau sheet masih kosong -> tulis header dulu
+        if not values:
+            ws.append_row(COLUMNS)
+
+        row = [summary.get(col, "") for col in COLUMNS]
+        ws.append_row(row)
+        st.toast("✅ Saved to Google Sheets", icon="✅")
+    except Exception as e:
+        st.error(f"❌ Error saving to Google Sheets: {e}")
 
 
 def load_reviews_from_sheet() -> pd.DataFrame:
-    """Load semua review dari Google Sheet ke DataFrame."""
-    ws = get_worksheet()
-    values = ws.get_all_values()
+    """
+    Load semua review dari Google Sheet ke DataFrame.
+    """
+    try:
+        ws = get_worksheet()
+        values = ws.get_all_values()
+    except Exception as e:
+        st.error(f"❌ Error loading from Google Sheets: {e}")
+        return pd.DataFrame(columns=COLUMNS)
+
     if not values or len(values) == 1:
         return pd.DataFrame(columns=COLUMNS)
 
@@ -146,6 +162,7 @@ def load_reviews_from_sheet() -> pd.DataFrame:
     rows = values[1:]
     df = pd.DataFrame(rows, columns=header)
 
+    # Pastikan semua kolom yang kita butuhkan ada
     for col in COLUMNS:
         if col not in df.columns:
             df[col] = ""
@@ -452,6 +469,13 @@ if current_role == "Reviewer":
                         "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                     }
                     save_review_to_sheet(summary)
+                    # Debug: tampilkan jumlah review di sheet
+                    try:
+                        ws_debug = get_worksheet()
+                        total_rows = max(len(ws_debug.get_all_values()) - 1, 0)
+                        st.info(f"Total reviews saved in Google Sheets: {total_rows}")
+                    except Exception as e:
+                        st.warning(f"Could not read back from Google Sheet: {e}")
                     st.success("✅ Review submitted & saved to central Google Sheet.")
 
 elif current_role == "Admin":
@@ -462,11 +486,7 @@ elif current_role == "Admin":
 # FINAL REVIEW SUMMARY (dari Google Sheets)
 # ============================================================
 
-try:
-    df_all = load_reviews_from_sheet()
-except Exception as e:
-    st.error(f"Error loading data from Google Sheets: {e}")
-    df_all = pd.DataFrame(columns=COLUMNS)
+df_all = load_reviews_from_sheet()
 
 if not df_all.empty:
     st.markdown("### 🚀 Final Review Summary (All Sessions)")
@@ -508,6 +528,7 @@ if not df_all.empty:
                 "text/csv"
             )
 
+    # Warning kalau reload halaman
     html("""
     <script>
     window.addEventListener('beforeunload', function (e) {
