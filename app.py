@@ -110,20 +110,37 @@ st.markdown("""
 
 def get_worksheet():
     """
-    Konek ke Google Sheet berdasarkan ID (bukan nama) dan kembalikan worksheet pertama.
-    ID harus disimpan di st.secrets["google_sheet_id"].
+    Konek ke Google Sheet berdasarkan ID dan kembalikan worksheet pertama.
+
+    ID bisa disimpan di:
+    - st.secrets["google_sheet_id"]  (top-level), atau
+    - st.secrets["google_service_account"]["google_sheet_id"]
     """
     scopes = [
         "https://www.googleapis.com/auth/spreadsheets",
         "https://www.googleapis.com/auth/drive",
     ]
+
+    # service account JSON di secrets, di bawah [google_service_account]
     creds_info = st.secrets["google_service_account"]
     creds = Credentials.from_service_account_info(creds_info, scopes=scopes)
     client = gspread.authorize(creds)
 
-    sheet_id = st.secrets["google_sheet_id"]  # <-- ID dari Secrets
-    sh = client.open_by_key(sheet_id)         # buka file berdasarkan ID, bukan nama
-    ws = sh.sheet1                            # pakai tab pertama
+    # Coba ambil ID dari top-level dulu
+    sheet_id = st.secrets.get("google_sheet_id", None)
+    # Kalau tidak ada, coba ambil dari dalam google_service_account
+    if sheet_id is None:
+        sheet_id = creds_info.get("google_sheet_id", None)
+
+    if sheet_id is None:
+        raise KeyError(
+            'google_sheet_id not found in secrets. '
+            'Tambahkan "google_sheet_id = \\"...ID...\\"" di secrets, '
+            'atau di dalam [google_service_account].'
+        )
+
+    sh = client.open_by_key(sheet_id)
+    ws = sh.sheet1
     return ws
 
 
