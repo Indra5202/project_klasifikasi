@@ -64,12 +64,17 @@ def detect_heading_presence(full_text: str, heading: str) -> int:
 
 # Reset session state jika PDF baru di-upload
 if pdf_file:
+    # Kalau PDF yang di-upload berbeda dengan sebelumnya, reset form
     if "current_pdf" not in st.session_state or st.session_state.current_pdf != pdf_file.name:
+        # Simpan dulu rekap review lama (kalau ada)
+        review_all_backup = st.session_state.get("review_all", [])
+
+        # Bersihkan semua session_state
+        st.session_state.clear()
+
+        # Restore rekap review dan set nama PDF sekarang
+        st.session_state.review_all = review_all_backup
         st.session_state.current_pdf = pdf_file.name
-        # reset semua key review_*
-        for key in list(st.session_state.keys()):
-            if key.startswith("review_"):
-                del st.session_state[key]
 
     # Baca teks dari PDF
     text = ""
@@ -208,4 +213,5 @@ if "review_all" in st.session_state and st.session_state.review_all:
         csv,
         "review_summary.csv",
         "text/csv"
+
     )
